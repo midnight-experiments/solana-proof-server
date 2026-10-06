@@ -14,12 +14,15 @@ docker run --rm --name night-market-prover -p 127.0.0.1:6300:6300 --memory 12g \
 
 Then, in Night Market's **Local Data** tab, enter `http://localhost:6300` and click **Test**.
 
-- **Memory.** One proof peaks at about 9.4 GiB, so give the container about 12 GB.
+- **Memory.** Give the container about 12 GB.
+  - Measured on a 12-CPU arm64 machine: the proof server peaked at 7.7 GiB per proof, and the container at 7.8 GiB.
+  - Each proof took 23–24 s.
+  - The 12 GB leaves headroom: an earlier run of the plain proof server, without the package's restart after each proof, reached 11 GiB over three proofs.
   - On Docker Desktop (macOS, Windows), first raise the VM's memory: Settings → Resources → Memory, at least 12 GB.
   - Without enough memory the proof server is stopped by the system. The package then answers `503 out-of-memory` and restarts it.
 - **This machine only.** `-p 127.0.0.1:6300:6300` publishes the port on localhost only. Inside the container the package listens on `0.0.0.0:6300`.
 - **Check it:** `curl http://localhost:6300/version`.
-- **Download size:** about 2.6 GB. The keys and parameters are random-looking field elements, which do not compress.
+- **Download size:** about 0.65 GB compressed, 2.7 GB on disk. The four prover keys are 552 MiB each.
 
 The page shows the exact command, pinned by digest, once the image is published.
 
