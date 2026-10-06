@@ -167,13 +167,17 @@ export class ProofServer {
     });
   }
 
+  /**
+   * Stops rc.8 at once. It holds nothing worth a graceful stop (a proof in flight is lost either way),
+   * and its own graceful shutdown waits about 3 s for idle connections, long enough for `docker stop`
+   * to escalate to SIGKILL on some hosts.
+   */
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
     const proc = this.proc;
     if (!proc) return;
-    proc.kill('SIGTERM');
-    const done = await Promise.race([proc.exited.then(() => true), sleep(5000).then(() => false)]);
-    if (!done) proc.kill('SIGKILL');
+    proc.kill('SIGKILL');
+    await Promise.race([proc.exited, sleep(2000)]);
   }
 
   /** rc.8's peak resident memory so far (VmHWM), in bytes. */
