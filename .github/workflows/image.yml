@@ -1,0 +1,139 @@
+# The package image.
+#
+# - Pull requests: unit tests, then build the image (linux/amd64) and smoke-test it. Nothing is pushed.
+# - A tag v<VERSION> (or a manual run on main): build linux/amd64 + linux/arm64 and push
+#   ghcr.io/midnight-experiments/solana-proof-server:<VERSION>-21493588 with the workflow's own token.
+#
+# The keys are never compiled here: the Dockerfile downloads the release `keys-21493588` and checks
+# every file against keys/SHA256SUMS and the key-set fingerprint.
+
+name: image
+
+on:
+  pull_request:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: ghcr.io/midnight-experiments/solana-proof-server
+  KEY_SET_SHORT: '21493588'
+  BUN_IMAGE: oven/bun:1.3.11@sha256:0733e50325078969732ebe3b15ce4c4be5082f18c4ac1a0f0ca4839c2e4e42a7
+
+jobs:
+  unit:
+    name: unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: bun test
+        run: docker run --rm -v "$PWD":/repo:ro -w /repo "$BUN_IMAGE" bun test
+      - name: check-keys.sh rejects a tampered list
+        run: |
+          set -eu
+          d=$(mktemp -d)
+          cp keys/SHA256SUMS keys/keyset-21493588.txt "$d"/
+          for c in append_inbox_with_ed25519 open_swap_shielded_with_ed25519 withdraw_shielded_with_ed25519 withdraw_unshielded_with_ed25519; do
+            for e in prover verifier bzkir; do echo x > "$d/$c.$e"; done
+          done
+          if sh scripts/check-keys.sh "$d"; then echo "check-keys.sh accepted wrong files" >&2; exit 1; fi
+
+  build:
+    name: build + smoke test (no push)
+    if: github.event_name == 'pull_request'
+    needs: unit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Free disk space (the image is about 2.9 GB, its keys 2.2 GB)
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Version
+        id: v
+        run: echo "version=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_OUTPUT"
+      - name: Build (linux/amd64, loaded locally, not pushed)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: solana-proof-server:ci
+          build-args: PACKAGE_VERSION=${{ steps.v.outputs.version }}
+      - name: Image size
+        run: docker image inspect solana-proof-server:ci --format '{{.Size}} bytes' | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Smoke test (version, CORS, refusals; no proof)
+        run: |
+          set -eu
+          docker run -d --name pkg -p 127.0.0.1:16300:6300 solana-proof-server:ci
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:16300/version >/dev/null && break; sleep 1; done
+          docker run --rm --network host -v "$PWD":/repo:ro -w /repo "$BUN_IMAGE" bun test/e2e.ts --base http://127.0.0.1:16300
+          docker logs pkg
+      - name: Teardown
+        if: always()
+        run: docker rm -f pkg || true
+
+  publish:
+    name: build + push to GHCR
+    if: github.event_name != 'pull_request' && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')
+    needs: unit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Version and tag
+        id: v
+        run: |
+          set -eu
+          version=$(tr -d '[:space:]' < VERSION)
+          if [ "${GITHUB_REF_TYPE}" = tag ] && [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match VERSION ${version} (expected v${version})" >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${IMAGE}:${version}-${KEY_SET_SHORT}" >> "$GITHUB_OUTPUT"
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push (linux/amd64 + linux/arm64)
+        id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.v.outputs.tag }}
+          build-args: PACKAGE_VERSION=${{ steps.v.outputs.version }}
+      - name: Digest
+        run: |
+          {
+            echo "### ${{ steps.v.outputs.tag }}"
+            echo
+            echo '```'
+            echo "${IMAGE}@${{ steps.push.outputs.digest }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

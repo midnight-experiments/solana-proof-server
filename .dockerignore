@@ -1,0 +1,6 @@
+# The build context is only what the image needs; the keys come from the keys-21493588 release.
+*
+!src/
+!keys/SHA256SUMS
+!keys/keyset-21493588.txt
+!scripts/check-keys.sh

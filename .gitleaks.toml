@@ -1,0 +1,9 @@
+# gitleaks: the default rules, plus one allowlisted value.
+title = "solana-proof-server"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "The public key-set fingerprint: the SHA-256 of keys/keyset-21493588.txt (published in the release), not a secret"
+regexes = ['''21493588f30536e0f409dcf79deea54878f0c2cf6fee601a2359e54a776d5c5e''']
