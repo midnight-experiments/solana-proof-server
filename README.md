@@ -166,3 +166,7 @@ bun test/e2e.ts --base http://127.0.0.1:6300 --vectors DIR --heavy            # 
 ```
 
 `DIR` holds golden vectors: real proof requests captured from Night Market's relay (AA 00062 P1).
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).
